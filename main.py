@@ -6,15 +6,35 @@ from problog.learning import lfi
 import pickle
 import os
 from flask import Flask, request, jsonify
-# from flask_cors import CORS
+from flask_cors import CORS
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from patient import Patient
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+app = Flask(__name__)
+CORS(app)
 
 
-# app = Flask(__name__)
-# CORS(app)
+def process_row(row, index, condition, term_string, evidence_list, final_model, is_last=False):
+    value = float(row[index]) if row[index] != '' else 0
+    is_normal = condition(value)
+    evidence_list.append((Term(term_string), is_normal, None))
+    if is_last:
+        final_model += term_string + "." if is_normal else "\+" + term_string + "."
+    else:
+        final_model += term_string + "," if is_normal else "\+" + term_string + ","
+    return final_model
+
+
+def process_person_attribute(attribute, condition, term_string, evidence_list, cast_func=float, default_value=0):
+    value = cast_func(attribute) if attribute != '' else default_value
+    is_condition_met = condition(value)
+    evidence_list.append((Term(term_string), is_condition_met, None))
+    return evidence_list
+
 
 def transformDatasetToModel(dataset):
     global set_liver
@@ -33,59 +53,23 @@ def transformDatasetToModel(dataset):
         evidence_list.append((Term("male"), is_male, None))
         final_model += "male," if is_male else "\+male,"
 
-        # Age column
-        age_user = int(row[0]) if row[0] != '' else 0
-        is_young = age_user < 50
-        evidence_list.append((Term("young"), is_young, None))
-        final_model += "young," if is_young else "\+young,"
+        # Define the data
+        conditions = [
+            {"index": 0, "condition": lambda x: x < 50, "term_string": "young"},
+            {"index": 2, "condition": lambda x: x < 1, "term_string": "normalBilirubin"},
+            {"index": 3, "condition": lambda x: x < 0.3, "term_string": "normalDirectBilirubin"},
+            {"index": 4, "condition": lambda x: x < 129, "term_string": "normalAlkalinePhosphotase"},
+            {"index": 5, "condition": lambda x: x < 41, "term_string": "normalAlamine"},
+            {"index": 6, "condition": lambda x: x < 40, "term_string": "normalAspartate"},
+            {"index": 7, "condition": lambda x: 6 <= x <= 8.3, "term_string": "normalTotalProteins"},
+            {"index": 8, "condition": lambda x: 3.5 <= x <= 5, "term_string": "normalAlbumin"},
+            {"index": 9, "condition": lambda x: 0.8 <= x <= 2, "term_string": "normalAGRatio"}
+        ]
 
-        # Total_Bilirubin
-        total_bilirubin = float(row[2]) if row[2] != '' else 0
-        is_normal_bilirubin = total_bilirubin < 1
-        evidence_list.append((Term("normalBilirubin"), is_normal_bilirubin, None))
-        final_model += "normalBilirubin," if is_normal_bilirubin else "\+normalBilirubin,"
-
-        # Direct_Bilirubin
-        direct_bilirubin = float(row[3]) if row[3] != '' else 0
-        is_normal_direct_bilirubin = direct_bilirubin < 0.3
-        evidence_list.append((Term("normalDirectBilirubin"), is_normal_direct_bilirubin, None))
-        final_model += "normalDirectBilirubin," if is_normal_direct_bilirubin else "\+normalDirectBilirubin,"
-
-        # Alkaline_Phosphotase
-        alkaline_phosphotase = float(row[4]) if row[4] != '' else 0
-        is_normal_alkaline_phosphotase = alkaline_phosphotase < 129
-        evidence_list.append((Term("normalAlkalinePhosphotase"), is_normal_alkaline_phosphotase, None))
-        final_model += "normalAlkalinePhosphotase," if is_normal_alkaline_phosphotase else "\+normalAlkalinePhosphotase,"
-
-        # Alamine_Aminotransferase
-        alamine_aminotransferase = float(row[5]) if row[5] != '' else 0
-        is_normal_alamine = alamine_aminotransferase < 41
-        evidence_list.append((Term("normalAlamine"), is_normal_alamine, None))
-        final_model += "normalAlamine," if is_normal_alamine else "\+normalAlamine,"
-
-        # Aspartate_Aminotransferase
-        aspartate_aminotransferase = float(row[6]) if row[6] != '' else 0
-        is_normal_aspartate = aspartate_aminotransferase < 40
-        evidence_list.append((Term("normalAspartate"), is_normal_aspartate, None))
-        final_model += "normalAspartate," if is_normal_aspartate else "\+normalAspartate,"
-
-        # Total_Proteins
-        total_proteins = float(row[7]) if row[7] != '' else 0
-        is_normal_total_proteins = 6 <= total_proteins <= 8.3
-        evidence_list.append((Term("normalTotalProteins"), is_normal_total_proteins, None))
-        final_model += "normalTotalProteins," if is_normal_total_proteins else "\+normalTotalProteins,"
-
-        # Albumin
-        albumin = float(row[8]) if row[8] != '' else 0
-        is_normal_albumin = 3.5 <= albumin <= 5
-        evidence_list.append((Term("normalAlbumin"), is_normal_albumin, None))
-        final_model += "normalAlbumin," if is_normal_albumin else "\+normalAlbumin,"
-
-        # Albumin_and_Globulin_Ratio
-        albumin_and_globulin_ratio = float(row[9]) if row[9] != '' else 0
-        is_normal_ag_ratio = 0.8 <= albumin_and_globulin_ratio <= 2
-        evidence_list.append((Term("normalAGRatio"), is_normal_ag_ratio, None))
-        final_model += "normalAGRatio." if is_normal_ag_ratio else "\+normalAGRatio."
+        for i, cond in enumerate(conditions):
+            is_last = i == len(conditions) - 1
+            final_model = process_row(row, cond["index"], cond["condition"], cond["term_string"], evidence_list,
+                                      final_model, is_last)
 
         final_model = final_model.replace(",.", ".")
         set_liver.add(final_model)
@@ -96,57 +80,25 @@ def submitPatient(person):
     global trained_model
     patient_evidence = []
 
-    # Gender input
-    gender_user = person.gender
-    is_male = gender_user == 1 if gender_user is not None else False
-    patient_evidence.append((Term("male"), is_male, None))
+    attributes = [
+        {"attr": person.gender, "condition": lambda x: x.lower() == 'male', "term_string": "male", "cast_func": str,
+         "default_value": False},
+        {"attr": person.age, "condition": lambda x: x < 50 and x is not None, "term_string": "young", "cast_func": int},
+        {"attr": person.total_bilirubin, "condition": lambda x: x < 1, "term_string": "normalBilirubin"},
+        {"attr": person.direct_bilirubin, "condition": lambda x: x < 0.3, "term_string": "normalDirectBilirubin"},
+        {"attr": person.alkaline_phosphotase, "condition": lambda x: x < 129,
+         "term_string": "normalAlkalinePhosphotase"},
+        {"attr": person.alamine_aminotransferase, "condition": lambda x: x < 41, "term_string": "normalAlamine"},
+        {"attr": person.aspartate_aminotransferase, "condition": lambda x: x < 40, "term_string": "normalAspartate"},
+        {"attr": person.total_proteins, "condition": lambda x: 6 <= x <= 8.3, "term_string": "normalTotalProteins"},
+        {"attr": person.albumin, "condition": lambda x: 3.5 <= x <= 5, "term_string": "normalAlbumin"},
+        {"attr": person.albumin_and_globulin_ratio, "condition": lambda x: 0.8 <= x <= 2,
+         "term_string": "normalAGRatio"}
+    ]
 
-    # Age input
-    age_user = int(person.age)
-    is_young = age_user is not None and age_user < 50
-    patient_evidence.append((Term("young"), is_young, None))
-
-    # Total_Bilirubin
-    total_bilirubin = float(person.total_bilirubin) if person.total_bilirubin != '' else 0
-    is_normal_bilirubin = total_bilirubin < 1
-    patient_evidence.append((Term("normalBilirubin"), is_normal_bilirubin, None))
-
-    # Direct_Bilirubin
-    direct_bilirubin = float(person.direct_bilirubin) if person.direct_bilirubin != '' else 0
-    is_normal_direct_bilirubin = direct_bilirubin < 0.3
-    patient_evidence.append((Term("normalDirectBilirubin"), is_normal_direct_bilirubin, None))
-
-    # Alkaline_Phosphotase
-    alkaline_phosphotase = float(person.alkaline_phosphotase) if person.alkaline_phosphotase != '' else 0
-    is_normal_alkaline_phosphotase = alkaline_phosphotase < 129
-    patient_evidence.append((Term("normalAlkalinePhosphotase"), is_normal_alkaline_phosphotase, None))
-
-    # Alamine_Aminotransferase
-    alamine_aminotransferase = float(person.alamine_aminotransferase) if person.alamine_aminotransferase != '' else 0
-    is_normal_alamine = alamine_aminotransferase < 41
-    patient_evidence.append((Term("normalAlamine"), is_normal_alamine, None))
-
-    # Aspartate_Aminotransferase
-    aspartate_aminotransferase = float(
-        person.aspartate_aminotransferase) if person.aspartate_aminotransferase != '' else 0
-    is_normal_aspartate = aspartate_aminotransferase < 40
-    patient_evidence.append((Term("normalAspartate"), is_normal_aspartate, None))
-
-    # Total_Proteins
-    total_proteins = float(person.total_proteins) if person.total_proteins != '' else 0
-    is_normal_total_proteins = 6 <= total_proteins <= 8.3
-    patient_evidence.append((Term("normalTotalProteins"), is_normal_total_proteins, None))
-
-    # Albumin
-    albumin = float(person.albumin) if person.albumin != '' else 0
-    is_normal_albumin = 3.5 <= albumin <= 5
-    patient_evidence.append((Term("normalAlbumin"), is_normal_albumin, None))
-
-    # Albumin_and_Globulin_Ratio
-    albumin_and_globulin_ratio = float(
-        person.albumin_and_globulin_ratio) if person.albumin_and_globulin_ratio != '' else 0
-    is_normal_ag_ratio = 0.8 <= albumin_and_globulin_ratio <= 2
-    patient_evidence.append((Term("normalAGRatio"), is_normal_ag_ratio, None))
+    for a in attributes:
+        patient_evidence = process_person_attribute(a["attr"], a["condition"], a["term_string"], patient_evidence,
+                                                    a.get("cast_func", float), a.get("default_value", 0))
 
     # Creating the problog model with evidences
     patient_data = trained_model
@@ -166,6 +118,7 @@ def submitPatient(person):
         else:
             prob_message = prob_message + "Probability to be healthy: " + format(value, ".4f") + "\n"
             counter = 0
+    print(prob_message)
     return prob_message
 
 
@@ -186,13 +139,13 @@ def getDataClass(row):
 model_path = os.path.join(os.getcwd(), 'trained_model.pkl')
 
 if os.path.exists(model_path):
-    print("Trained model found, loading...")
+    print("Found the trained model! Load in the system!")
     # Load the trained model from the file
     with open('trained_model.pkl', 'rb') as f:
         trained_model = pickle.load(f)
 
 else:
-    print("No trained model found, creating a new one...")
+    print("There is no trained model, training now!")
     # First I create a set and a list to save the csv and input user data
     set_liver = set()
     evidence = list()
@@ -209,17 +162,9 @@ else:
     term_list.sort()
 
     # Creating the Learning Model
-    model = """"""
-    model = model + "t(_)::male.\n"
-    model = model + "t(_)::young.\n"
-    model = model + "t(_)::normalBilirubin.\n"
-    model = model + "t(_)::normalDirectBilirubin.\n"
-    model = model + "t(_)::normalAlkalinePhosphotase.\n"
-    model = model + "t(_)::normalAlamine.\n"
-    model = model + "t(_)::normalAspartate.\n"
-    model = model + "t(_)::normalTotalProteins.\n"
-    model = model + "t(_)::normalAlbumin.\n"
-    model = model + "t(_)::normalAGRatio.\n"
+    terms = ['male', 'young', 'normalBilirubin', 'normalDirectBilirubin', 'normalAlkalinePhosphotase',
+             'normalAlamine', 'normalAspartate', 'normalTotalProteins', 'normalAlbumin', 'normalAGRatio']
+    model = "".join(f"t(_)::{term}.\n" for term in terms)
 
     for y in range(len(term_list)):
         if y != (len(term_list) - 1):
@@ -242,7 +187,8 @@ else:
     print("Trained Model created")
 
     # Convert test_data into a list of Patient objects
-    test_patients = [Patient(row[1], row[0], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9]) for row in
+    test_patients = [Patient(row[1], row[0], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9]) for row
+                     in
                      test_data.itertuples(index=False)]
 
     # Get the actual and predicted classifications
@@ -254,7 +200,7 @@ else:
     prec = precision_score(actual_classifications, predicted_classifications, average='macro')
     rec = recall_score(actual_classifications, predicted_classifications, average='macro')
     f1 = f1_score(actual_classifications, predicted_classifications, average='macro')
-
+    cm = confusion_matrix(actual_classifications, predicted_classifications)
     # Write the metrics to a file
     with open('metrics.txt', 'w') as f:
         f.write(f'Accuracy: {acc}\n')
@@ -263,5 +209,59 @@ else:
         f.write(f'F1 Score: {f1}\n')
 
         # Compute and write the confusion matrix
-        cm = confusion_matrix(actual_classifications, predicted_classifications)
         f.write(f'Confusion Matrix: \n{cm}\n')
+
+    # Metrics
+    metrics = {
+        'Accuracy': acc,
+        'Precision': prec,
+        'Recall': rec,
+        'F1 Score': f1
+    }
+
+    # Bar chart
+    plt.figure(figsize=(10, 5))
+    plt.bar(metrics.keys(), metrics.values(), color=['blue', 'purple', 'orange', 'green'])
+    plt.title('Model Performance Metrics')
+    plt.ylabel('Score')
+    plt.xlabel('Metrics')
+    plt.ylim([0, 1])
+    plt.show()
+
+    # Confusion matrix
+    plt.figure(figsize=(10, 7))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.show()
+
+@app.route('/liver-disease-prediction', methods=['POST'])
+def predict_liver_disease():
+    jsonData = request.get_json(force=True)  # forcing the interpretation of request data as JSON
+
+    # Create a patient object with the provided data
+    patient = Patient(
+        jsonData['gender'],
+        int(jsonData['age']),
+        float(jsonData['total_bilirubin']),
+        float(jsonData['direct_bilirubin']),
+        float(jsonData['alkaline_phosphotase']),
+        float(jsonData['alamine_aminotransferase']),
+        float(jsonData['aspartate_aminotransferase']),
+        float(jsonData['total_proteins']),
+        float(jsonData['albumin']),
+        float(jsonData['albumin_and_globulin_ratio'])
+    )
+
+    # Call the function to get disease prediction
+    prediction = submitPatient(patient)
+
+    # Return the prediction result as JSON
+    return jsonify({
+        'prediction': prediction
+    })
+
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
