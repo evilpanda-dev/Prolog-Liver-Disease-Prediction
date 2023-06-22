@@ -1,18 +1,17 @@
-import time
+import pickle
+import os
+import pandas as pd
+import seaborn as sns
 from problog.program import PrologString
 from problog import get_evaluatable
 from problog.logic import Term
 from problog.learning import lfi
-import pickle
-import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
-import pandas as pd
 from sklearn.model_selection import train_test_split
-from patient import Patient
 import matplotlib.pyplot as plt
-import seaborn as sns
+from patient import Patient
 
 app = Flask(__name__)
 CORS(app)
